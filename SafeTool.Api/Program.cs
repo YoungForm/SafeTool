@@ -33,8 +33,11 @@ builder.Services.AddAuthentication(options =>
     };
 });
 builder.Services.AddSingleton<SafeTool.Application.Services.ComplianceEvaluator>();
+builder.Services.AddSingleton<SafeTool.Application.Services.IEC62061Evaluator>();
 builder.Services.AddSingleton<SafeTool.Application.Services.IReportGenerator, SafeTool.Application.Services.HtmlReportGenerator>();
 builder.Services.AddSingleton<SafeTool.Application.Services.IPdfReportService, SafeTool.Application.Services.PdfReportService>();
+builder.Services.AddSingleton<SafeTool.Application.Services.IIec62061ReportGenerator, SafeTool.Application.Services.Iec62061HtmlReportGenerator>();
+builder.Services.AddSingleton<SafeTool.Application.Services.InteropService>();
 // AI增强：如果提供OPENAI_API_KEY则使用OpenAI，否则使用本地摘要
 var apiKey = builder.Configuration["OPENAI_API_KEY"] ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY");
 if (!string.IsNullOrWhiteSpace(apiKey))
@@ -57,6 +60,12 @@ Directory.CreateDirectory(dataDir);
 builder.Services.AddSingleton(new SafeTool.Application.Services.PlrRuleService(dataDir));
 builder.Services.AddSingleton(new SafeTool.Application.Services.AuditService(dataDir));
 builder.Services.AddSingleton<SafeTool.Application.Services.CcfService>();
+builder.Services.AddSingleton(new SafeTool.Application.Services.ComponentLibraryService(dataDir));
+builder.Services.AddSingleton(new SafeTool.Application.Services.ComplianceMatrixService(dataDir));
+builder.Services.AddSingleton(new SafeTool.Application.Services.EvidenceService(dataDir));
+builder.Services.AddSingleton(new SafeTool.Application.Services.VerificationChecklistService(dataDir));
+builder.Services.AddSingleton(new SafeTool.Application.Services.ProjectModelService(dataDir));
+builder.Services.AddSingleton<SafeTool.Application.Services.ModelComputeService>();
 
 var app = builder.Build();
 
@@ -199,6 +208,182 @@ srs.MapPost("/{id}/draft", async (SafeTool.Application.Services.SrsService srsSe
 });
 
 srs.MapGet("/audit/logs", (SafeTool.Application.Services.AuditService audit, string? user, string? action, int? skip, int? take) => Results.Ok(audit.Query(user, action, skip ?? 0, take ?? 200)));
+
+var iec62061 = app.MapGroup("/api/iec62061").RequireAuthorization();
+iec62061.MapPost("/evaluate", (SafeTool.Application.Services.IEC62061Evaluator eval, SafeTool.Domain.Standards.SafetyFunction62061 func, HttpRequest request) =>
+{
+    var (result, input) = eval.Evaluate(func);
+    var user = request.HttpContext.User?.Identity?.Name ?? "unknown";
+    app.Services.GetRequiredService<SafeTool.Application.Services.AuditService>().Log(user, "evaluate", "iec62061", $"评估 {input.Name} PFHd={result.PFHd:E2} SIL={result.AchievedSIL}");
+    return Results.Ok(result);
+});
+iec62061.MapPost("/report", (SafeTool.Application.Services.IEC62061Evaluator eval, SafeTool.Application.Services.IIec62061ReportGenerator reports, SafeTool.Domain.Standards.SafetyFunction62061 func, HttpRequest request) =>
+{
+    var (result, input) = eval.Evaluate(func);
+    var html = reports.GenerateHtml(input, result);
+    var user = request.HttpContext.User?.Identity?.Name ?? "unknown";
+    app.Services.GetRequiredService<SafeTool.Application.Services.AuditService>().Log(user, "report-html", "iec62061", $"生成IEC62061 HTML报告: {input.Name}");
+    return Results.Text(html, "text/html; charset=utf-8");
+});
+iec62061.MapPost("/report.pdf", (SafeTool.Application.Services.IEC62061Evaluator eval, SafeTool.Application.Services.IPdfReportService pdf, SafeTool.Domain.Standards.SafetyFunction62061 func, HttpRequest request) =>
+{
+    var (result, input) = eval.Evaluate(func);
+    var bytes = pdf.GenerateIec62061Pdf(input, result);
+    var user = request.HttpContext.User?.Identity?.Name ?? "unknown";
+    app.Services.GetRequiredService<SafeTool.Application.Services.AuditService>().Log(user, "report-pdf", "iec62061", $"生成IEC62061 PDF报告: {input.Name}");
+    return Results.File(bytes, "application/pdf", fileDownloadName: "IEC62061Report.pdf");
+});
+
+var library = app.MapGroup("/api/library").RequireAuthorization();
+library.MapGet("/components", (SafeTool.Application.Services.ComponentLibraryService svc) => Results.Ok(svc.List()));
+library.MapGet("/components/{id}", (SafeTool.Application.Services.ComponentLibraryService svc, string id) =>
+{
+    var item = svc.Get(id);
+    return item is null ? Results.NotFound() : Results.Ok(item);
+});
+library.MapPost("/components", (SafeTool.Application.Services.ComponentLibraryService svc, SafeTool.Application.Services.ComponentLibraryService.ComponentRecord rec, HttpRequest request) =>
+{
+    var added = svc.Add(rec);
+    var user = request.HttpContext.User?.Identity?.Name ?? "unknown";
+    app.Services.GetRequiredService<SafeTool.Application.Services.AuditService>().Log(user, "add", "library", $"新增组件 {added.Id}");
+    return Results.Ok(added);
+});
+library.MapPut("/components/{id}", (SafeTool.Application.Services.ComponentLibraryService svc, string id, SafeTool.Application.Services.ComponentLibraryService.ComponentRecord rec) =>
+{
+    return svc.Update(id, rec) ? Results.Ok() : Results.NotFound();
+});
+library.MapDelete("/components/{id}", (SafeTool.Application.Services.ComponentLibraryService svc, string id) =>
+{
+    return svc.Delete(id) ? Results.Ok() : Results.NotFound();
+});
+library.MapPost("/import", async (SafeTool.Application.Services.ComponentLibraryService svc, HttpRequest request) =>
+{
+    using var reader = new StreamReader(request.Body);
+    var json = await reader.ReadToEndAsync();
+    var count = svc.ImportJson(json);
+    return Results.Ok(new { imported = count });
+});
+library.MapGet("/export", (SafeTool.Application.Services.ComponentLibraryService svc) => Results.Text(svc.ExportJson(), "application/json"));
+
+var interop = app.MapGroup("/api/interop").RequireAuthorization();
+interop.MapPost("/import", async (SafeTool.Application.Services.InteropService svc, HttpRequest request) =>
+{
+    using var reader = new StreamReader(request.Body);
+    var json = await reader.ReadToEndAsync();
+    var dto = svc.ImportJson(json);
+    return Results.Ok(dto);
+});
+interop.MapPost("/export", (SafeTool.Application.Services.InteropService svc, SafeTool.Domain.Interop.ProjectDto dto, string? target, SafeTool.Application.Services.ProjectModelService modelSvc) =>
+{
+    if (string.IsNullOrWhiteSpace(target) || target!.Equals("json", StringComparison.OrdinalIgnoreCase))
+        return Results.Text(svc.ExportJson(dto), "application/json");
+    if (target!.Equals("project", StringComparison.OrdinalIgnoreCase))
+        return Results.Text(modelSvc.ExportJson(), "application/json");
+    var obj = svc.ExportTarget(dto, target!);
+    return Results.Ok(obj);
+});
+
+var model = app.MapGroup("/api/model").RequireAuthorization();
+model.MapGet("/project", (SafeTool.Application.Services.ProjectModelService svc) => Results.Text(svc.ExportJson(), "application/json"));
+model.MapPost("/project", async (SafeTool.Application.Services.ProjectModelService svc, HttpRequest request) =>
+{
+    using var reader = new StreamReader(request.Body);
+    var json = await reader.ReadToEndAsync();
+    var n = svc.ImportJson(json);
+    return Results.Ok(new { functions = n });
+});
+model.MapGet("/functions", (SafeTool.Application.Services.ProjectModelService svc) => Results.Ok(svc.List()));
+model.MapPost("/functions", (SafeTool.Application.Services.ProjectModelService svc, SafeTool.Application.Services.ProjectModelService.Function f, HttpRequest request) =>
+{
+    var saved = svc.Upsert(f);
+    var user = request.HttpContext.User?.Identity?.Name ?? "unknown";
+    app.Services.GetRequiredService<SafeTool.Application.Services.AuditService>().Log(user, "upsert", "model", $"函数 {saved.Id} {saved.Name}");
+    return Results.Ok(saved);
+});
+model.MapPost("/compute", (SafeTool.Application.Services.ModelComputeService compute, SafeTool.Application.Services.ProjectModelService.Function f) =>
+{
+    var r = compute.Compute(f);
+    return Results.Ok(r);
+});
+
+var matrix = app.MapGroup("/api/compliance/matrix").RequireAuthorization();
+matrix.MapGet("", (SafeTool.Application.Services.ComplianceMatrixService svc, string projectId) => Results.Ok(svc.Get(projectId)));
+matrix.MapPost("", (SafeTool.Application.Services.ComplianceMatrixService svc, string projectId, SafeTool.Application.Services.ComplianceMatrixService.Entry entry, HttpRequest request) =>
+{
+    var added = svc.Add(projectId, entry);
+    var user = request.HttpContext.User?.Identity?.Name ?? "unknown";
+    app.Services.GetRequiredService<SafeTool.Application.Services.AuditService>().Log(user, "add", "matrix", $"项目 {projectId} 新增矩阵条目 {added.Id}");
+    return Results.Ok(added);
+});
+matrix.MapPost("/export", (SafeTool.Application.Services.ComplianceMatrixService svc, string projectId) =>
+{
+    var csv = svc.ExportCsv(projectId);
+    return Results.Text(csv, "text/csv; charset=utf-8");
+});
+matrix.MapPost("/import", async (SafeTool.Application.Services.ComplianceMatrixService svc, string projectId, HttpRequest request) =>
+{
+    using var reader = new StreamReader(request.Body);
+    var csv = await reader.ReadToEndAsync();
+    var n = svc.ImportCsv(projectId, csv);
+    return Results.Ok(new { imported = n });
+});
+
+var evidence = app.MapGroup("/api/evidence").RequireAuthorization();
+evidence.MapGet("", (SafeTool.Application.Services.EvidenceService svc, string? type, string? status) => Results.Ok(svc.List(type, status)));
+evidence.MapPost("", async (SafeTool.Application.Services.EvidenceService svc, HttpRequest request) =>
+{
+    var form = await request.ReadFormAsync();
+    var name = form["name"].ToString();
+    var type = form["type"].ToString();
+    var note = form["note"].ToString();
+    var source = form["source"].ToString();
+    var issuer = form["issuer"].ToString();
+    DateTime? validUntil = null; if (DateTime.TryParse(form["validUntil"].ToString(), out var du)) validUntil = du;
+    var url = form["url"].ToString();
+    var file = form.Files.FirstOrDefault();
+    var e = svc.Add(name, type, note, file, source, issuer, validUntil, url);
+    return Results.Ok(e);
+});
+evidence.MapPost("/link", (SafeTool.Application.Services.EvidenceService svc, string evidenceId, string resourceType, string resourceId) =>
+{
+    var l = svc.CreateLink(evidenceId, resourceType, resourceId);
+    return Results.Ok(l);
+});
+evidence.MapGet("/{id}", (SafeTool.Application.Services.EvidenceService svc, string id) =>
+{
+    var e = svc.Get(id);
+    return e is null ? Results.NotFound() : Results.Ok(e);
+});
+evidence.MapGet("/{id}/download", (SafeTool.Application.Services.EvidenceService svc, string id) =>
+{
+    var f = svc.GetFile(id);
+    return f is null ? Results.NotFound() : Results.File(f.Value.path, f.Value.contentType, fileDownloadName: f.Value.name);
+});
+
+var verification = app.MapGroup("/api/verification").RequireAuthorization();
+verification.MapGet("/items", (SafeTool.Application.Services.VerificationChecklistService svc, string projectId, string standard) => Results.Ok(svc.Get(projectId, standard)));
+verification.MapPost("/items", (SafeTool.Application.Services.VerificationChecklistService svc, string projectId, string standard, SafeTool.Application.Services.VerificationChecklistService.Item item, HttpRequest request) =>
+{
+    var saved = svc.Upsert(projectId, standard, item);
+    var user = request.HttpContext.User?.Identity?.Name ?? "unknown";
+    app.Services.GetRequiredService<SafeTool.Application.Services.AuditService>().Log(user, "upsert", "verification", $"{projectId}/{standard} 条目 {saved.Code}={saved.Result}");
+    return Results.Ok(saved);
+});
+verification.MapPost("/seed", (SafeTool.Application.Services.VerificationChecklistService svc, string projectId, string standard) => Results.Ok(svc.Seed(projectId, standard)));
+
+library.MapGet("/export.csv", (SafeTool.Application.Services.ComponentLibraryService svc) =>
+{
+    var items = svc.List();
+    var sb = new System.Text.StringBuilder();
+    sb.AppendLine("id,manufacturer,model,category,PFHd,beta");
+    foreach (var x in items)
+    {
+        var pf = x.Parameters?.GetValueOrDefault("PFHd") ?? x.Parameters?.GetValueOrDefault("pfhd") ?? "";
+        var b = x.Parameters?.GetValueOrDefault("beta") ?? x.Parameters?.GetValueOrDefault("Beta") ?? "";
+        sb.AppendLine($"{x.Id},{x.Manufacturer},{x.Model},{x.Category},{pf},{b}");
+    }
+    return Results.Text(sb.ToString(), "text/csv; charset=utf-8");
+});
 
 app.Run();
 

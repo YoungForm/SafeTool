@@ -8,6 +8,7 @@ public class ComplianceChecklist
     public ISO13849Assessment ISO13849 { get; set; } = new();
     public List<ChecklistItem> GeneralItems { get; set; } = new();
     public string SystemName { get; set; } = string.Empty;
+    public string? ProjectId { get; set; }
     public string Assessor { get; set; } = string.Empty;
     public DateTime AssessmentDate { get; set; } = DateTime.UtcNow;
 }
