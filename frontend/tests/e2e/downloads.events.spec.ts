@@ -1,0 +1,47 @@
+import { test, expect } from '@playwright/test'
+import { setupAuth, mockBinary } from './_helpers'
+import { waitAndClickDownload, saveDownload, clickButton } from './actions'
+
+test('合规与IEC PDF下载事件', async ({ page }) => {
+  await setupAuth(page)
+  await mockBinary(page, '**/api/compliance/report.pdf', Buffer.from('%PDF-TEST'), 'application/pdf')
+  await mockBinary(page, '**/api/iec62061/report.pdf', Buffer.from('%PDF-IEC'), 'application/pdf')
+  await page.goto('/')
+  await page.getByLabel('用户名').fill('user')
+  await page.getByLabel('密码').fill('pass')
+  await page.getByRole('button', { name: '登录' }).click()
+  const download1 = await waitAndClickDownload(page, '导出PDF')
+  expect(download1.suggestedFilename()).toBeTruthy()
+  const file1 = await saveDownload(download1, 'compliance.pdf')
+  await clickButton(page, 'IEC 62061')
+  const download2 = await waitAndClickDownload(page, '导出PDF')
+  expect(download2.suggestedFilename()).toBeTruthy()
+  const file2 = await saveDownload(download2, 'iec62061.pdf')
+  expect(file1 && file2).toBeTruthy()
+})
+
+test('互通与证据包下载事件', async ({ page }) => {
+  await setupAuth(page)
+  await mockBinary(page, '**/api/interop/export/sistema/*', 'csv', 'text/csv')
+  await mockBinary(page, '**/api/interop/export/pascal/*', '{}', 'application/json')
+  await mockBinary(page, '**/api/interop/export/siemens-set/*', '{}', 'application/json')
+  await page.route('**/api/evidence/package/generate', async route => {
+    await route.fulfill({ json: { projectId: 'demo', items: [ { id: 'E1' } ] } })
+  })
+  await mockBinary(page, '**/api/evidence/package/export/json', '{}', 'application/json')
+  await mockBinary(page, '**/api/evidence/package/export/report', '<html></html>', 'text/html')
+  await page.goto('/')
+  await page.getByLabel('用户名').fill('user')
+  await page.getByLabel('密码').fill('pass')
+  await page.getByRole('button', { name: '登录' }).click()
+  await clickButton(page, '互通')
+  await page.getByPlaceholder('项目ID').fill('demo')
+  const dl1 = await waitAndClickDownload(page, '导出 SISTEMA CSV'); expect(dl1.suggestedFilename()).toBeTruthy(); const f1 = await saveDownload(dl1, 'sistema.csv')
+  const dl2 = await waitAndClickDownload(page, '导出 PAScal JSON'); expect(dl2.suggestedFilename()).toBeTruthy()
+  const dl3 = await waitAndClickDownload(page, '导出 Siemens SET JSON'); expect(dl3.suggestedFilename()).toBeTruthy()
+  await clickButton(page, '证据包')
+  await clickButton(page, '生成')
+  const dl4 = await waitAndClickDownload(page, '导出 JSON'); expect(dl4.suggestedFilename()).toBeTruthy(); const f4 = await saveDownload(dl4, 'evidence.json')
+  const dl5 = await waitAndClickDownload(page, '导出报告'); expect(dl5.suggestedFilename()).toBeTruthy(); const f5 = await saveDownload(dl5, 'evidence.html')
+  expect(f1 && f4 && f5).toBeTruthy()
+})
