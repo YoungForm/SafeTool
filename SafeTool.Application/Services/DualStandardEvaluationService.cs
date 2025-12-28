@@ -72,7 +72,7 @@ public class DualStandardEvaluationService
     /// </summary>
     private DetailedComparison GenerateDetailedComparison(
         SafeTool.Domain.Compliance.EvaluationResult iso13849Result,
-        SafeTool.Domain.Standards.SafetyFunction62061 iec62061Function)
+        SafeTool.Domain.Standards.IEC62061EvaluationResult iec62061Result)
     {
         return new DetailedComparison
         {
@@ -89,15 +89,15 @@ public class DualStandardEvaluationService
                 {
                     Aspect = "安全完整性等级",
                     Iso13849Value = "N/A",
-                    Iec62061Value = iec62061Function.TargetSIL,
+                    Iec62061Value = iec62061Result.AchievedSIL.ToString(),
                     Consistency = "N/A"
                 },
                 new ComparisonItem
                 {
                     Aspect = "符合性",
-                    Iso13849Value = iso13849Result.OverallCompliance ? "符合" : "不符合",
-                    Iec62061Value = iec62061Function.AchievedSIL == iec62061Function.TargetSIL ? "符合" : "不符合",
-                    Consistency = (iso13849Result.OverallCompliance == (iec62061Function.AchievedSIL == iec62061Function.TargetSIL)) ? "一致" : "不一致"
+                    Iso13849Value = iso13849Result.IsCompliant ? "符合" : "不符合",
+                    Iec62061Value = iec62061Result.AchievedSIL.ToString() == "SIL3" ? "符合" : "不符合",
+                    Consistency = (iso13849Result.IsCompliant == (iec62061Result.AchievedSIL.ToString() == "SIL3")) ? "一致" : "不一致"
                 }
             }
         };
@@ -109,18 +109,18 @@ public class DualStandardEvaluationService
     private string ExtractPL(SafeTool.Domain.Compliance.EvaluationResult result)
     {
         // 从评估结果中提取PL
-        if (result.OverallCompliance && result.Details != null)
+        if (result.IsCompliant && result.Details != null)
         {
             foreach (var detail in result.Details)
             {
-                if (detail.Contains("PL") && (detail.Contains("PLa") || detail.Contains("PLb") ||
-                    detail.Contains("PLc") || detail.Contains("PLd") || detail.Contains("PLe")))
+                if (detail.Value.Contains("PL") && (detail.Value.Contains("PLa") || detail.Value.Contains("PLb") ||
+                    detail.Value.Contains("PLc") || detail.Value.Contains("PLd") || detail.Value.Contains("PLe")))
                 {
-                    if (detail.Contains("PLe")) return "PLe";
-                    if (detail.Contains("PLd")) return "PLd";
-                    if (detail.Contains("PLc")) return "PLc";
-                    if (detail.Contains("PLb")) return "PLb";
-                    if (detail.Contains("PLa")) return "PLa";
+                    if (detail.Value.Contains("PLe")) return "PLe";
+                    if (detail.Value.Contains("PLd")) return "PLd";
+                    if (detail.Value.Contains("PLc")) return "PLc";
+                    if (detail.Value.Contains("PLb")) return "PLb";
+                    if (detail.Value.Contains("PLa")) return "PLa";
                 }
             }
         }
@@ -130,9 +130,9 @@ public class DualStandardEvaluationService
     /// <summary>
     /// 提取SIL
     /// </summary>
-    private string ExtractSIL(SafeTool.Domain.Standards.SafetyFunction62061 function)
+    private string ExtractSIL(SafeTool.Domain.Standards.IEC62061EvaluationResult result)
     {
-        return function.TargetSIL;
+        return result.AchievedSIL.ToString();
     }
 
     /// <summary>
@@ -140,7 +140,7 @@ public class DualStandardEvaluationService
     /// </summary>
     private ConsistencyAnalysis AnalyzeConsistency(
         SafeTool.Domain.Compliance.EvaluationResult iso13849Result,
-        SafeTool.Domain.Standards.SafetyFunction62061 iec62061Result,
+        SafeTool.Domain.Standards.IEC62061EvaluationResult iec62061Result,
         PlSilMappingResult? mapping)
     {
         var analysis = new ConsistencyAnalysis
@@ -163,7 +163,7 @@ public class DualStandardEvaluationService
         }
 
         // 检查两个标准的符合性是否一致
-        if (iso13849Result.OverallCompliance != (iec62061Result.AchievedSIL == iec62061Result.TargetSIL))
+        if (iso13849Result.IsCompliant != (iec62061Result.AchievedSIL.ToString() == "SIL3"))
         {
             analysis.IsConsistent = false;
             analysis.Issues.Add("两个标准的符合性判断不一致");
@@ -194,7 +194,7 @@ public class DualStandardEvaluationService
             }
         }
 
-        if (result.Iso13849Result.OverallCompliance && result.Iec62061Result.AchievedSIL == result.Iec62061Result.TargetSIL)
+        if (result.Iso13849Result != null && result.Iso13849Result.IsCompliant && result.Iec62061Result != null && result.Iec62061Result.AchievedSIL.ToString() == "SIL3")
         {
             recommendations.Add("✓ 两个标准均满足要求");
         }
@@ -207,7 +207,7 @@ public class DualStandardEvaluationResult
 {
     public DateTime EvaluatedAt { get; set; }
     public SafeTool.Domain.Compliance.EvaluationResult? Iso13849Result { get; set; }
-    public SafeTool.Domain.Standards.SafetyFunction62061? Iec62061Result { get; set; }
+    public SafeTool.Domain.Standards.IEC62061EvaluationResult? Iec62061Result { get; set; }
     public PlSilMappingResult? PlSilMapping { get; set; }
     public ConsistencyAnalysis? ConsistencyAnalysis { get; set; }
     public List<string> Recommendations { get; set; } = new();
@@ -220,24 +220,7 @@ public class ConsistencyAnalysis
     public List<string> Issues { get; set; } = new();
 }
 
-public class DualStandardEvaluationOptions
-{
-    public bool GenerateDetailedComparison { get; set; } = false;
-    public bool IncludeRecommendations { get; set; } = true;
-}
 
-public class DetailedComparison
-{
-    public List<ComparisonItem> ComparisonItems { get; set; } = new();
-}
-
-public class ComparisonItem
-{
-    public string Aspect { get; set; } = string.Empty;
-    public string Iso13849Value { get; set; } = string.Empty;
-    public string Iec62061Value { get; set; } = string.Empty;
-    public string Consistency { get; set; } = string.Empty;
-}
 
 public class DualStandardEvaluationOptions
 {

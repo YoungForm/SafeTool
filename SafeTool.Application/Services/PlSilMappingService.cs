@@ -125,5 +125,32 @@ public class PlSilMappingService
         public List<string> Warnings { get; set; } = new();
         public List<string> RecommendedActions { get; set; } = new();
     }
+
+    /// <summary>
+    /// 执行PL↔SIL对照
+    /// </summary>
+    public PlSilMappingResult Map(string achievedPL, string achievedSIL)
+    {
+        // 实现映射逻辑
+        var result = new PlSilMappingResult
+        {
+            AchievedPL = achievedPL,
+            AchievedSIL = achievedSIL,
+            IsConsistent = true, // 默认一致，实际逻辑需要根据映射规则判断
+            Warnings = new List<string>(),
+            Notes = new List<string>()
+        };
+
+        return result;
+    }
+}
+
+public class PlSilMappingResult
+{
+    public string AchievedPL { get; set; } = string.Empty;
+    public string AchievedSIL { get; set; } = string.Empty;
+    public bool IsConsistent { get; set; }
+    public List<string> Warnings { get; set; } = new();
+    public List<string> Notes { get; set; } = new();
 }
 

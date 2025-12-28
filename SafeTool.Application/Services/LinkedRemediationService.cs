@@ -136,8 +136,8 @@ public class LinkedRemediationService
     private string ExtractPLFromMapping(PlSilMappingResult mapping)
     {
         // 从映射结果中提取PL
-        if (mapping.PL != null)
-            return mapping.PL;
+        if (!string.IsNullOrEmpty(mapping.AchievedPL))
+            return mapping.AchievedPL;
 
         return string.Empty;
     }

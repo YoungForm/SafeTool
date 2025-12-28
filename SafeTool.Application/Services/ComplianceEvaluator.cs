@@ -5,7 +5,7 @@ namespace SafeTool.Application.Services;
 
 public class ComplianceEvaluator
 {
-    public EvaluationResult Evaluate(ComplianceChecklist data)
+    public SafeTool.Domain.Compliance.EvaluationResult Evaluate(ComplianceChecklist data)
     {
         var details = new Dictionary<string, string>();
 

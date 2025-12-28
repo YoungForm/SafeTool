@@ -56,7 +56,7 @@ public class SrecsDecompositionService
                 Name = subsystem.Name,
                 Architecture = subsystem.Architecture,
                 ComponentCount = subsystem.Components.Count,
-                PFHd = subsystem.PFHd,
+                PFHd = subsystem.PFHdCalculated,
                 Complexity = CalculateSubsystemComplexity(subsystem)
             });
         }
@@ -236,7 +236,7 @@ public class SrecsDecompositionService
     /// <summary>
     /// 计算子系统复杂度
     /// </summary>
-    private string CalculateSubsystemComplexity(SafeTool.Domain.Standards.Subsystem62061 subsystem)
+    private string CalculateSubsystemComplexity(SafeTool.Domain.Standards.IEC62061Subsystem subsystem)
     {
         if (subsystem.Components.Count > 10)
             return "VeryHigh";
@@ -279,12 +279,12 @@ public class SrecsDecompositionService
     /// <summary>
     /// 获取方程示例
     /// </summary>
-    private string GetEquationExample(string architecture, List<SafeTool.Domain.Standards.Subsystem62061> subsystems)
+    private string GetEquationExample(string architecture, List<SafeTool.Domain.Standards.IEC62061Subsystem> subsystems)
     {
         if (subsystems.Any())
         {
             var firstSubsystem = subsystems.First();
-            return $"示例：{firstSubsystem.Name}，PFHd = {firstSubsystem.PFHd:E2}";
+            return $"示例：{firstSubsystem.Name}，PFHd = {firstSubsystem.PFHdCalculated:E2}";
         }
         return "无示例";
     }
